@@ -1,6 +1,7 @@
 import asyncio
 import json
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional
@@ -33,9 +34,19 @@ class Engine:
         self.trace = TraceCollector()
         self.trace.bind(self.context.session_dir)
         self._agents: Dict[str, Agent] = {}
+        self._cancel = threading.Event()
+
+    def cancel(self):
+        """실행 중인 파이프라인을 중단 요청."""
+        self._cancel.set()
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
 
     def new_session(self):
         """새 세션 시작 -FileContext + Logger 리셋 (M-001)"""
+        self._cancel.clear()
         self.context = FileContext(self._config.get("workspace_dir", "workspace"))
         self.logger = ExecutionLogger(self._config.get("log_dir", "logs"))
         self.master = MasterAgent(self.provider, self.context)
@@ -208,6 +219,8 @@ class Engine:
         previous_output: Optional[str] = None
 
         for i in range(n):
+            if self.cancelled:
+                break
             self.logger.log_start(agent.name, f"loop_{i+1}")
 
             if previous_output is None:
@@ -271,10 +284,13 @@ class Engine:
                         detail=f"Generator → Queue({threshold}) → {agent.name}")
 
         total_start = time.time()
+        response = None
         queue_buffer: list = []
 
         # ── Generator Phase: 틱을 하나씩 발행 ──
         for i, tick in enumerate(ticks):
+            if self.cancelled:
+                break
             tick_json = json.dumps(tick, ensure_ascii=False)
             queue_buffer.append(tick)
 
@@ -319,12 +335,18 @@ class Engine:
 
                 queue_buffer.clear()
 
-            await asyncio.sleep(tick_interval)
+            # cancel 가능한 sleep: 0.1초 단위로 체크
+            remaining = tick_interval
+            while remaining > 0 and not self.cancelled:
+                step = min(0.1, remaining)
+                await asyncio.sleep(step)
+                remaining -= step
 
         total_elapsed = time.time() - total_start
         self.trace.emit("pipeline_end", pattern="reactive",
                         elapsed_seconds=total_elapsed)
-        print(f"\n[DONE] Reactive 전체 완료 ({total_elapsed:.1f}s)")
+        label = "중단됨" if self.cancelled else "완료"
+        print(f"\n[DONE] Reactive 전체 {label} ({total_elapsed:.1f}s)")
 
         if response:
             self.context.save_final_result(response.text)
@@ -356,6 +378,8 @@ class Engine:
         review_feedback: Optional[str] = None
 
         for i in range(n):
+            if self.cancelled:
+                break
             round_label = f"Round {i + 1}/{n}"
 
             # ── Writer 턴 ──

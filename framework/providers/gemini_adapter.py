@@ -40,7 +40,12 @@ class GeminiProvider(BaseProvider):
             )
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()
             raise ProviderTimeoutError("gemini", timeout)
+        except (asyncio.CancelledError, Exception):
+            proc.kill()
+            await proc.wait()
+            raise
 
         elapsed = time.time() - start
 

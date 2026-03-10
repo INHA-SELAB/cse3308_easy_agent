@@ -7,10 +7,13 @@ Tkinter 기반 파이프라인 교육용 GUI.
         + 공유 출력 뷰어
 """
 
+import platform
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
+
+_IS_MACOS = platform.system() == "Darwin"
 
 
 # 노드 상태별 색상
@@ -114,11 +117,15 @@ class PipelineGUI:
         self._agent_names: list = []
         self._agent_outputs: dict = {}
         self._agent_elapsed: dict = {}
-        self._pulse_node: str = None
+        self._pulse_nodes: set = set()
         self._pulse_after_id = None
         self._pulse_visible = True
         self._selected_node: str = None
         self._live_edge_ids: list = []
+        self._poll_after_id = None
+        self._poll_generation = 0
+        self._run_generation = 0
+        self._last_trace = None
 
         # Pattern state
         self._current_pattern = "orchestration"
@@ -196,7 +203,8 @@ class PipelineGUI:
         # Run button (single, shared)
         self.run_btn = tk.Button(
             frame, text="\u25b6  실행", command=self._run_pipeline,
-            bg=COLOR_ACCENT, fg="white", activebackground="#3A7BC8",
+            bg=COLOR_ACCENT, fg=COLOR_ACCENT if _IS_MACOS else "white",
+            activebackground="#3A7BC8",
             activeforeground="white", font=("Segoe UI", 10, "bold"),
             relief=tk.FLAT, cursor="hand2", height=1,
         )
@@ -770,6 +778,7 @@ class PipelineGUI:
     def _draw_dag_orchestration(self, agent_names: list):
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
         self._agent_names = agent_names
@@ -803,6 +812,7 @@ class PipelineGUI:
     def _draw_dag_sequential(self):
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
 
@@ -840,6 +850,7 @@ class PipelineGUI:
     def _draw_dag_parallel(self):
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
         self._agent_names = list(PARALLEL_AGENTS)
@@ -878,6 +889,7 @@ class PipelineGUI:
     def _draw_dag_tool_call(self):
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
         self._agent_names = ["worker"]
@@ -933,6 +945,7 @@ class PipelineGUI:
     def _draw_dag_loop(self, agent_name: str):
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
         self._agent_names = [agent_name] if agent_name else []
@@ -1002,6 +1015,7 @@ class PipelineGUI:
         """Ping-Pong: writer(좌) ↔ reviewer(우) + 왕복 화살표 + 횟수 표시."""
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
         self._agent_names = [PINGPONG_WRITER, PINGPONG_REVIEWER]
@@ -1052,6 +1066,7 @@ class PipelineGUI:
         """Reactive: Generator(좌) → Queue(중앙) → Agent(우)."""
         self.canvas.delete("all")
         self._node_ids.clear()
+        self._node_colors.clear()
         self._node_positions.clear()
         self._live_edge_ids.clear()
         self._agent_names = ["Generator", "Observer", REACTIVE_AGENT]
@@ -1154,29 +1169,44 @@ class PipelineGUI:
     # ── Pulse animation ──────────────────────────────────────
 
     def _start_pulse(self, label: str):
-        self._stop_pulse()
-        self._pulse_node = label
-        self._pulse_visible = True
-        self._do_pulse()
+        self._pulse_nodes.add(label)
+        if not self._pulse_after_id:
+            self._pulse_visible = True
+            self._do_pulse()
 
-    def _stop_pulse(self):
-        if self._pulse_after_id:
-            self.root.after_cancel(self._pulse_after_id)
-            self._pulse_after_id = None
-        if self._pulse_node and self._pulse_node in self._node_ids:
-            ids = self._node_ids[self._pulse_node]
-            outline = COLOR_ACCENT if self._pulse_node == self._selected_node else "#888"
-            self.canvas.itemconfig(ids[0], outline=outline)
-        self._pulse_node = None
+    def _stop_pulse(self, label: str = None):
+        if label:
+            self._pulse_nodes.discard(label)
+            if label in self._node_ids:
+                ids = self._node_ids[label]
+                outline = COLOR_ACCENT if label == self._selected_node else "#888"
+                self.canvas.itemconfig(ids[0], outline=outline)
+            if not self._pulse_nodes and self._pulse_after_id:
+                self.root.after_cancel(self._pulse_after_id)
+                self._pulse_after_id = None
+        else:
+            for node in list(self._pulse_nodes):
+                if node in self._node_ids:
+                    ids = self._node_ids[node]
+                    outline = COLOR_ACCENT if node == self._selected_node else "#888"
+                    self.canvas.itemconfig(ids[0], outline=outline)
+            self._pulse_nodes.clear()
+            if self._pulse_after_id:
+                self.root.after_cancel(self._pulse_after_id)
+                self._pulse_after_id = None
 
     def _do_pulse(self):
-        if not self._pulse_node or self._pulse_node not in self._node_ids:
+        if not self._pulse_nodes:
+            self._pulse_after_id = None
             return
-        ids = self._node_ids[self._pulse_node]
-        if self._pulse_visible:
-            self.canvas.itemconfig(ids[0], outline=COLOR_PULSE_BORDER)
-        else:
-            self.canvas.itemconfig(ids[0], outline="#888")
+        for node in list(self._pulse_nodes):
+            if node not in self._node_ids:
+                continue
+            ids = self._node_ids[node]
+            if self._pulse_visible:
+                self.canvas.itemconfig(ids[0], outline=COLOR_PULSE_BORDER)
+            else:
+                self.canvas.itemconfig(ids[0], outline="#888")
         self._pulse_visible = not self._pulse_visible
         self._pulse_after_id = self.root.after(500, self._do_pulse)
 
@@ -1217,6 +1247,7 @@ class PipelineGUI:
             self._run_reactive()
 
     def _reset_state(self):
+        self._run_generation += 1
         self._done = False
         self._running = True
         self._interrupted = False
@@ -1232,12 +1263,12 @@ class PipelineGUI:
         self._set_config_enabled(False)
         self.run_btn.configure(
             text="\u25a0  중단", command=self._interrupt_pipeline,
-            bg="#D9534F", activebackground="#C9302C",
+            bg="#D9534F", fg="#D9534F" if _IS_MACOS else "white",
+            activebackground="#C9302C",
             state=tk.NORMAL,
         )
-        self.log_text.configure(state=tk.NORMAL)
-        self.log_text.delete("1.0", tk.END)
-        self.log_text.configure(state=tk.DISABLED)
+        self._stop_pulse()
+        self._show_log_placeholder()
         self._show_output_placeholder()
         self._status_text = "파이프라인 실행 중..."
         self._set_status(self._status_text)
@@ -1247,6 +1278,8 @@ class PipelineGUI:
         """실행 중인 파이프라인을 중단."""
         self._interrupted = True
         self._done = True
+        if self._engine:
+            self._engine.cancel()
         self._status_text = "중단 중..."
         self._set_status(self._status_text)
 
@@ -1275,14 +1308,17 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_orchestration(self, request: str, agents: list, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, master
             self._engine = _get_engine(provider=provider)
             self._results = master(request, agents, provider=provider)
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Sequential ─────────────────────────────────────────────
 
@@ -1311,14 +1347,17 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_sequential(self, steps: list, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, sequential
             self._engine = _get_engine(provider=provider)
             self._results = sequential(steps, provider=provider)
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Parallel ──────────────────────────────────────────────
 
@@ -1341,14 +1380,17 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_parallel(self, request: str, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, master_parallel
             self._engine = _get_engine(provider=provider)
             self._results = master_parallel(request, PARALLEL_AGENTS, provider=provider)
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Tool Calling ──────────────────────────────────────────
 
@@ -1368,14 +1410,17 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_tool_call(self, request: str, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, tool_call
             self._engine = _get_engine(provider=provider)
             self._results = tool_call("worker", request, TOOL_DESC, provider=provider)
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Loop (Self-Refinement) ────────────────────────────────
 
@@ -1407,14 +1452,17 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_loop(self, request: str, agent_name: str, n: int, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, loop
             self._engine = _get_engine(provider=provider)
             self._results = loop(agent_name, request, n=n, provider=provider)
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Ping-Pong ──────────────────────────────────────────────
 
@@ -1442,6 +1490,7 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_ping_pong(self, request: str, n: int, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, ping_pong
             self._engine = _get_engine(provider=provider)
@@ -1450,9 +1499,11 @@ class PipelineGUI:
                 n=n, provider=provider,
             )
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Reactive ───────────────────────────────────────────────
 
@@ -1471,6 +1522,7 @@ class PipelineGUI:
         self._poll_trace()
 
     def _execute_reactive(self, provider: str):
+        gen = self._run_generation
         try:
             from . import _get_engine, reactive
             self._engine = _get_engine(provider=provider)
@@ -1481,9 +1533,11 @@ class PipelineGUI:
                 provider=provider,
             )
         except Exception as e:
-            self._error = str(e)
+            if gen == self._run_generation:
+                self._error = str(e)
         finally:
-            self._done = True
+            if gen == self._run_generation:
+                self._done = True
 
     # ── Trace polling ─────────────────────────────────────────
 
@@ -1491,9 +1545,13 @@ class PipelineGUI:
         if self._engine is None:
             return
         try:
-            events = self._engine.trace.events
+            trace = self._engine.trace
+            events = trace.events
         except Exception:
             return
+        if trace is not self._last_trace:
+            self._last_trace = trace
+            self._trace_idx = 0
         while self._trace_idx < len(events):
             event = events[self._trace_idx]
             self._trace_idx += 1
@@ -1504,11 +1562,23 @@ class PipelineGUI:
                 pass
 
     def _poll_trace(self):
+        # 이전 실행의 poll 취소
+        if self._poll_after_id:
+            self.root.after_cancel(self._poll_after_id)
+            self._poll_after_id = None
+        self._poll_generation += 1
+        gen = self._poll_generation
+        self._poll_tick(gen)
+
+    def _poll_tick(self, gen: int):
+        if gen != self._poll_generation:
+            return
         self._drain_events()
         if not self._done:
-            self.root.after(200, self._poll_trace)
+            self._poll_after_id = self.root.after(200, self._poll_tick, gen)
         else:
             self._drain_events()
+            self._poll_after_id = None
             self._on_complete()
 
     def _update_log(self, event):
@@ -1553,6 +1623,9 @@ class PipelineGUI:
         tag = tag_map.get(event.event, None)
 
         self.log_text.configure(state=tk.NORMAL)
+        # 첫 이벤트 시 placeholder 제거
+        if self.log_text.get("1.0", tk.END).strip() == LOG_PLACEHOLDER:
+            self.log_text.delete("1.0", tk.END)
         if tag:
             self.log_text.insert(tk.END, line, tag)
         else:
@@ -1657,7 +1730,7 @@ class PipelineGUI:
                 if event.output_preview:
                     self._agent_outputs["Master"] = event.output_preview
                 # Master → 모든 에이전트 라이브 엣지
-                for name in PARALLEL_AGENTS:
+                for name in self._agent_names:
                     pos_m = self._node_positions.get("Master")
                     pos_a = self._node_positions.get(name)
                     if pos_m and pos_a:
@@ -1679,14 +1752,7 @@ class PipelineGUI:
         elif etype == "agent_complete":
             if agent:
                 self._set_node_color(agent, COLOR_DONE)
-                # 모든 에이전트가 펄스 중일 수 있으므로, 완료된 것만 중지
-                if self._pulse_node == agent:
-                    self._stop_pulse()
-                    # 아직 실행 중인 에이전트 펄스 재시작
-                    for name in PARALLEL_AGENTS:
-                        if name != agent and self._node_colors.get(name) == COLOR_AGENT_ACTIVE:
-                            self._start_pulse(name)
-                            break
+                self._stop_pulse(agent)
                 if event.elapsed_seconds is not None:
                     self._agent_elapsed[agent] = event.elapsed_seconds
                     self._set_node_subtext(agent, f"{event.elapsed_seconds:.1f}s")
@@ -1961,6 +2027,7 @@ class PipelineGUI:
 
     def _on_complete(self):
         self._running = False
+        self._engine = None
         self._stop_pulse()
         self._stop_elapsed_timer()
         # 설정 복원 + 버튼을 실행으로 변경
@@ -1970,7 +2037,8 @@ class PipelineGUI:
             self.request_text.configure(state=tk.DISABLED)
         self.run_btn.configure(
             text="\u25b6  실행", command=self._run_pipeline,
-            bg=COLOR_ACCENT, activebackground="#3A7BC8",
+            bg=COLOR_ACCENT, fg=COLOR_ACCENT if _IS_MACOS else "white",
+            activebackground="#3A7BC8",
             state=tk.NORMAL,
         )
         self._set_status("중단됨" if self._interrupted else "완료")
