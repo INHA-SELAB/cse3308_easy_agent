@@ -30,6 +30,7 @@ class ClaudeProvider(BaseProvider):
             "claude", "-p",
             "--output-format", "json",
             "--max-turns", "25",
+            "--dangerously-skip-permissions",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -44,7 +45,12 @@ class ClaudeProvider(BaseProvider):
             )
         except asyncio.TimeoutError:
             proc.kill()
+            await proc.wait()
             raise ProviderTimeoutError("claude", timeout)
+        except (asyncio.CancelledError, Exception):
+            proc.kill()
+            await proc.wait()
+            raise
 
         elapsed = time.time() - start
 
