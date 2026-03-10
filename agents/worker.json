@@ -1,0 +1,6 @@
+{
+  "name": "worker",
+  "role": "범용 작업 수행 에이전트",
+  "system_prompt": "당신은 주어진 작업을 수행하는 에이전트입니다. 요청에 따라 최선의 결과물을 생성하세요.",
+  "output_format": "markdown"
+}

@@ -1,0 +1,35 @@
+{
+  "provider": "claude",
+  "providers": {
+    "claude": {
+      "command": "claude",
+      "flags": ["-p", "--output-format", "json"],
+      "result_field": "result",
+      "cost_field": "cost_usd"
+    },
+    "gemini": {
+      "command": "gemini",
+      "flags": ["-p", "--output-format", "json"],
+      "result_field": "response",
+      "cost_field": null
+    },
+    "codex": {
+      "command": "codex",
+      "subcommand": "exec",
+      "flags": [
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox"
+      ],
+      "result_field": null,
+      "cost_field": null
+    }
+  },
+  "workspace_dir": "./workspace",
+  "log_dir": "./logs",
+  "agents_dir": "./agents",
+  "max_turns": 1,
+  "context": {
+    "max_inline_chars": 50000
+  }
+}
